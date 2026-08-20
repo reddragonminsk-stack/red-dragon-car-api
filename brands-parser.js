@@ -11,7 +11,7 @@ const EXPECTED_MODELS = Number(process.env.BRANDS_EXPECTED_MODELS || 1624);
 
 const H = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36',
-  Accept: 'text/html,application/xhtml+xml,application/json,text/plain,text/html,*/*',
+  Accept: 'text/html,application/json,text/plain,*/*',
   'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
   Referer: 'https://im4car.by/'
 };
@@ -124,11 +124,12 @@ function extractJsonLdBrands(html) {
 function extractModels(html) {
   const models = [];
   const seen = new Set();
-  const anchorRe = /<a[^>]+href=["'](\/catalog\/brand\/([^/]+)\/([^"'#?]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const anchorRe = /<a[^>]+href=["']((?:https?:\/\/im4car\.by)?\/catalog\/brand\/([^/]+)\/([^"'#?]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match;
 
   while ((match = anchorRe.exec(html))) {
-    const relativeUrl = match[1];
+    const rawUrl = match[1];
+    const relativeUrl = rawUrl.replace(/^https?:\/\/im4car\.by/i, '');
     const brandSlug = decodeURIComponent(match[2]);
     const modelSlug = decodeURIComponent(match[3]);
     const body = match[4];
