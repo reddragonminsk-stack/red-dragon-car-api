@@ -1,5 +1,6 @@
 const express=require('express');
 const cors=require('cors');
+const cheerio=require('cheerio');
 
 const app=express();
 const PORT=process.env.PORT||10000;
@@ -18,167 +19,328 @@ app.use(cors({
   allowedHeaders:['Content-Type']
 }));
 
-const SOURCE='https://im4car.by';
+app.use(express.json());
 
-async function fetchSource(path='/catalog'){
+const SOURCE='https://im4car.by';
+const SOURCE_CATALOG=SOURCE+'/catalog';
+
+function cleanText(v){
+  return String(v||'')
+    .replace(/\u00a0/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function absUrl(v){
+  if(!v)return '';
+  try{return new URL(v,SOURCE).href}catch{return ''}
+}
+
+function numberValue(v){
+  if(v==null)return null;
+  const n=String(v).replace(/[^\d.,-]/g,'').replace(/\s/g,'').replace(',', '.');
+  const x=Number(n);
+  return Number.isFinite(x)?x:null;
+}
+
+function intValue(v){
+  const n=String(v||'').replace(/[^\d]/g,'');
+  return n?Number(n):null;
+}
+
+function ownersWord(n){
+  if(n===1)return 'владелец';
+  if(n>=2&&n<=4)return 'владельца';
+  return 'владельцев';
+}
+
+async function fetchSource(path='/catalog',query=''){
+  const url=SOURCE+path+(query?`?${query}`:'');
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),25000);
 
   try{
-    const r=await fetch(SOURCE+path,{
+    const r=await fetch(url,{
       signal:controller.signal,
       headers:{
-        'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36',
-        'Accept':'text/html,application/xhtml+xml',
+        'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+        'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language':'ru-RU,ru;q=0.9,en;q=0.8',
         'Cache-Control':'no-cache'
       }
     });
 
     if(!r.ok)throw new Error(`Source HTTP ${r.status}`);
+
     return await r.text();
   }finally{
     clearTimeout(timer);
   }
 }
 
-function clean(s){
-  return String(s||'')
-    .replace(/&amp;/g,'&')
-    .replace(/&quot;/g,'"')
-    .replace(/&#x27;/g,"'")
-    .replace(/&#39;/g,"'")
-    .replace(/&lt;/g,'<')
-    .replace(/&gt;/g,'>')
-    .replace(/\s+/g,' ')
-    .trim();
-}
+function parseMeta(text){
+  const s=cleanText(text);
+  const result={
+    year:null,
+    new:false,
+    mileage:null,
+    fuel:null,
+    owners:null
+  };
 
-function decodeHtml(s){
-  for(let i=0;i<2;i++){
-    const x=clean(s);
-    if(x===s)return x;
-    s=x;
+  const ym=s.match(/\b(19\d{2}|20\d{2})\b/);
+  if(ym)result.year=Number(ym[1]);
+
+  if(/\bНовый\b/i.test(s)){
+    result.new=true;
+  }else{
+    const mm=s.match(/([\d\s.,]+)\s*км\b/i);
+    if(mm)result.mileage=intValue(mm[1]);
   }
-  return clean(s);
+
+  const fuels=[
+    'Гибрид (PHEV)',
+    'Гибрид (HEV)',
+    'Гибрид',
+    'Электро',
+    'Бензин',
+    'Дизель',
+    'Газ'
+  ];
+
+  for(const fuel of fuels){
+    if(s.includes(fuel)){
+      result.fuel=fuel;
+      break;
+    }
+  }
+
+  const om=s.match(/(\d+)\s+владельц/i);
+  if(om)result.owners=Number(om[1]);
+
+  return result;
 }
 
-function extractCars(html){
+function extractPrice(text){
+  const s=cleanText(text);
+  const m=s.match(/\$\s*([\d\s]+(?:[.,]\d+)?)/);
+  return m?intValue(m[1]):null;
+}
+
+function extractByn(text){
+  const s=cleanText(text);
+
+  let m=s.match(/([\d\s]+)\s*белорусских\s+рубл/i);
+  if(m)return intValue(m[1]);
+
+  m=s.match(/([\d\s]+)\s*BYN\b/i);
+  if(m)return intValue(m[1]);
+
+  return null;
+}
+
+function extractCondition(text){
+  const s=cleanText(text);
+  const m=s.match(/Состояние\s*·\s*([^0-9]+?)(?=\s+\d{4}\b|\s+\d{3,6}\s*км|\s+Новый\b|\s+Электро\b|\s+Бензин\b|\s+Дизель\b|\s+Гибрид\b|$)/i);
+  return m?cleanText(m[1]):'Без оценки';
+}
+
+function extractPhotos(text){
+  const s=cleanText(text);
+
+  let m=s.match(/(?:^|\s)(\d{1,3})\s*фото\b/i);
+  if(m)return Number(m[1]);
+
+  m=s.match(/Первая линия\s+(\d{1,3})\s*фото/i);
+  if(m)return Number(m[1]);
+
+  return null;
+}
+
+function isLikelyCarCardText(text){
+  const s=cleanText(text);
+
+  return (
+    /Примерно,\s*с\s*доставкой/i.test(s) &&
+    /\$\s*[\d\s]+/i.test(s) &&
+    /Состояние\s*·/i.test(s) &&
+    /\b(?:Бензин|Дизель|Электро|Гибрид)\b/i.test(s) &&
+    /\b(?:19|20)\d{2}\b/.test(s)
+  );
+}
+
+function findCardRoot($,img){
+  let node=img;
+
+  for(let i=0;i<9&&node.length;i++){
+    const text=cleanText(node.text());
+
+    if(isLikelyCarCardText(text)){
+      return node;
+    }
+
+    node=node.parent();
+  }
+
+  return null;
+}
+
+function extractTitle($,card,img){
+  const imageAlt=cleanText($(img).attr('alt'));
+
+  if(imageAlt&&imageAlt.length>10)return imageAlt;
+
+  const text=cleanText(card.text());
+
+  const marker=text.search(/Примерно,\s*с\s*доставкой/i);
+
+  if(marker>0){
+    let before=text.slice(0,marker);
+
+    before=before
+      .replace(/Первая линия/g,'')
+      .replace(/\b\d{1,3}\s*фото\b/gi,'')
+      .replace(/^\s*[\d\s]+\s*/,'')
+      .trim();
+
+    if(before.length>8)return before;
+  }
+
+  return 'Автомобиль';
+}
+
+function extractImage($,img){
+  const attrs=[
+    'src',
+    'data-src',
+    'data-lazy-src',
+    'data-original',
+    'data-image'
+  ];
+
+  for(const a of attrs){
+    const v=$(img).attr(a);
+    if(v&&/im4car\.com/i.test(v))return absUrl(v);
+  }
+
+  const srcset=$(img).attr('srcset')||$(img).attr('data-srcset')||'';
+  if(srcset){
+    const parts=srcset.split(',').map(x=>x.trim().split(/\s+/)[0]).filter(Boolean);
+    const preferred=parts[parts.length-1];
+    if(preferred&&/im4car\.com/i.test(preferred))return absUrl(preferred);
+  }
+
+  return '';
+}
+
+function extractHref($,card){
+  const a=card.find('a[href]').first();
+  if(!a.length)return'';
+
+  const href=a.attr('href')||'';
+  if(!href)return'';
+
+  if(href.startsWith('#'))return'';
+
+  return absUrl(href);
+}
+
+function parseCars(html){
+  const $=cheerio.load(html,{
+    decodeEntities:true
+  });
+
   const cars=[];
   const seen=new Set();
 
-  /*
-   * IM4CAR отдаёт ссылки на изображения автомобилей
-   * непосредственно в HTML/RSC-разметке.
-   *
-   * Берём preview.webp и ищем ближайшие данные вокруг него.
-   */
-  const imgRe=/https:\/\/img\.im4car\.com\/(?:400|640|750|828|1080|1200|1920)\/cars\/[a-z0-9-]+\/preview\.webp/gi;
+  $('img').each((_,img)=>{
+    const image=extractImage($,img);
+    if(!image)return;
+    if(!/\/cars\//i.test(image))return;
+    if(seen.has(image))return;
 
-  let match;
+    const card=findCardRoot($,$(img));
+    if(!card)return;
 
-  while((match=imgRe.exec(html))!==null){
-    const image=match[0];
+    const text=cleanText(card.text());
+    if(!isLikelyCarCardText(text))return;
 
-    if(seen.has(image))continue;
+    const title=extractTitle($,card,img);
+
+    if(
+      !title||
+      title==='Автомобиль'||
+      title.length<5
+    )return;
+
+    const priceUsd=extractPrice(text);
+    const priceByn=extractByn(text);
+    const condition=extractCondition(text);
+    const photos=extractPhotos(text);
+    const meta=parseMeta(text);
+    const url=extractHref($,card);
+    const firstLine=/Первая линия/i.test(text);
+
+    if(!priceUsd)return;
+
     seen.add(image);
 
-    const start=Math.max(0,match.index-5000);
-    const end=Math.min(html.length,match.index+8000);
-    const chunk=html.slice(start,end);
-
-    let title='';
-    let url='';
-    let price='';
-    let year='';
-    let mileage='';
-    let fuel='';
-    let gearbox='';
-    let drive='';
-    let photos='';
-
-    const titlePatterns=[
-      /(?:title|name|modelName|carName)["=:]+["']([^"']{3,180})["']/i,
-      /alt=["']([^"']{3,180})["']/i
-    ];
-
-    for(const re of titlePatterns){
-      const m=chunk.match(re);
-      if(m){
-        title=decodeHtml(m[1]);
-        if(title&&!/IM4CAR/i.test(title))break;
-      }
-    }
-
-    const hrefPatterns=[
-      /href=["'](\/(?:car|cars|catalog)\/[^"']+)["']/i,
-      /href=["'](https:\/\/im4car\.by\/(?:car|cars|catalog)\/[^"']+)["']/i
-    ];
-
-    for(const re of hrefPatterns){
-      const m=chunk.match(re);
-      if(m){
-        url=m[1].startsWith('http')?m[1]:SOURCE+m[1];
-        break;
-      }
-    }
-
-    const pricePatterns=[
-      /(?:price|priceUsd|price_usd|priceUSD)["=:]+["']?([\d\s,.]+)\s*(?:\$|USD)?/i,
-      /([\d\s,.]+)\s*\$/i
-    ];
-
-    for(const re of pricePatterns){
-      const m=chunk.match(re);
-      if(m){
-        price=clean(m[1]).replace(/\s/g,'');
-        break;
-      }
-    }
-
-    const yearMatch=chunk.match(/(?:year|releaseYear|productionYear)["=:]+["']?(20\d{2})/i);
-    if(yearMatch)year=yearMatch[1];
-
-    const mileageMatch=chunk.match(/(?:mileage|mileageKm|mileage_km)["=:]+["']?([\d\s,.]+)/i);
-    if(mileageMatch)mileage=clean(mileageMatch[1]);
-
-    const fuelMatch=chunk.match(/(?:fuel|fuelType|fuel_type)["=:]+["']([^"']{2,40})["']/i);
-    if(fuelMatch)fuel=decodeHtml(fuelMatch[1]);
-
-    const gearboxMatch=chunk.match(/(?:gearbox|transmission)["=:]+["']([^"']{2,40})["']/i);
-    if(gearboxMatch)gearbox=decodeHtml(gearboxMatch[1]);
-
-    const driveMatch=chunk.match(/(?:drive|driveType|drivetrain)["=:]+["']([^"']{2,40})["']/i);
-    if(driveMatch)drive=decodeHtml(driveMatch[1]);
-
-    const photoMatch=chunk.match(/(?:imageCount|photosCount|photoCount)["=:]+["']?(\d+)/i);
-    if(photoMatch)photos=photoMatch[1];
-
-    /*
-     * Даже если часть полей не удалось найти,
-     * карточку всё равно сохраняем — изображение уже
-     * является надёжным признаком карточки автомобиля.
-     */
     cars.push({
-      title:title||'Автомобиль из каталога',
-      price:price||null,
-      year:year||null,
-      mileage:mileage||null,
-      fuel:fuel||null,
-      gearbox:gearbox||null,
-      drive:drive||null,
-      photos:photos||null,
+      id:`${image}|${title}`,
+      title,
       image,
-      url:url||SOURCE+'/catalog'
+      photos,
+      firstLine,
+      priceUsd,
+      priceByn,
+      condition,
+      year:meta.year,
+      new:meta.new,
+      mileage:meta.mileage,
+      fuel:meta.fuel,
+      owners:meta.owners,
+      ownersText:meta.owners!=null?`${meta.owners} ${ownersWord(meta.owners)}`:'',
+      url
     });
+  });
 
-    if(cars.length>=30)break;
+  return cars;
+}
+
+function shuffle(arr){
+  const a=arr.slice();
+
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
   }
 
-  /*
-   * Убираем дубликаты по изображениям.
-   */
-  return cars.filter((car,i,a)=>a.findIndex(x=>x.image===car.image)===i);
+  return a;
+}
+
+function normalizeCars(cars){
+  return cars.filter(c=>
+    c&&
+    c.title&&
+    c.image&&
+    c.priceUsd!=null
+  ).map(c=>({
+    id:c.id,
+    title:cleanText(c.title),
+    image:c.image,
+    photos:c.photos,
+    firstLine:!!c.firstLine,
+    priceUsd:c.priceUsd,
+    priceByn:c.priceByn,
+    condition:c.condition||'Без оценки',
+    year:c.year,
+    new:!!c.new,
+    mileage:c.mileage,
+    fuel:c.fuel,
+    owners:c.owners,
+    ownersText:c.ownersText||'',
+    url:c.url
+  }));
 }
 
 app.get('/health',(req,res)=>{
@@ -189,52 +351,31 @@ app.get('/health',(req,res)=>{
   });
 });
 
-app.get('/api/cars',async(req,res)=>{
-  try{
-    const html=await fetchSource('/catalog');
-    const cars=extractCars(html);
-
-    res.set({
-      'Cache-Control':'public,max-age=120',
-      'Content-Type':'application/json; charset=utf-8'
-    });
-
-    res.json({
-      ok:true,
-      source:'im4car.by',
-      count:cars.length,
-      updatedAt:new Date().toISOString(),
-      cars
-    });
-  }catch(error){
-    console.error('[api/cars]',error);
-
-    res.status(502).json({
-      ok:false,
-      source:'im4car.by',
-      error:'Не удалось получить автомобили',
-      message:error.message
-    });
-  }
-});
-
 app.get('/api/catalog',async(req,res)=>{
   try{
-    const html=await fetchSource('/catalog');
+    const query=new URLSearchParams();
 
-    res.set({
-      'Cache-Control':'public,max-age=60',
-      'Content-Type':'application/json; charset=utf-8'
+    Object.entries(req.query||{}).forEach(([key,value])=>{
+      if(
+        typeof value==='string' &&
+        /^[a-zA-Z0-9_]+$/.test(key)
+      ){
+        query.set(key,value);
+      }
     });
+
+    const html=await fetchSource('/catalog',query.toString());
+
+    res.set('Cache-Control','public,max-age=60');
 
     res.json({
       ok:true,
       source:'im4car.by',
-      url:SOURCE+'/catalog',
+      url:SOURCE_CATALOG,
       html
     });
   }catch(error){
-    console.error('[api/catalog]',error);
+    console.error('[catalog]',error);
 
     res.status(502).json({
       ok:false,
@@ -244,9 +385,90 @@ app.get('/api/catalog',async(req,res)=>{
   }
 });
 
-app.get('/api/catalog-html',async(req,res)=>{
+app.get('/api/cars',async(req,res)=>{
+  try{
+    const query=new URLSearchParams();
+
+    Object.entries(req.query||{}).forEach(([key,value])=>{
+      if(
+        typeof value==='string' &&
+        /^[a-zA-Z0-9_]+$/.test(key)
+      ){
+        query.set(key,value);
+      }
+    });
+
+    const html=await fetchSource('/catalog',query.toString());
+
+    let cars=normalizeCars(parseCars(html));
+
+    const limit=Math.min(
+      Math.max(Number(req.query.limit)||6,1),
+      30
+    );
+
+    if(req.query.random==='1'||req.query.random==='true'){
+      cars=shuffle(cars);
+    }
+
+    cars=cars.slice(0,limit);
+
+    res.set('Cache-Control','public,max-age=30');
+
+    res.json({
+      ok:true,
+      source:'im4car.by',
+      count:cars.length,
+      totalParsed:normalizeCars(parseCars(html)).length,
+      cars
+    });
+  }catch(error){
+    console.error('[cars]',error);
+
+    res.status(502).json({
+      ok:false,
+      error:'Не удалось распарсить автомобили',
+      message:error.message,
+      cars:[]
+    });
+  }
+});
+
+app.get('/api/debug-cars',async(req,res)=>{
   try{
     const html=await fetchSource('/catalog');
+    const cars=normalizeCars(parseCars(html));
+
+    res.json({
+      ok:true,
+      source:'im4car.by',
+      parsed:cars.length,
+      sample:cars.slice(0,5)
+    });
+  }catch(error){
+    console.error('[debug-cars]',error);
+
+    res.status(502).json({
+      ok:false,
+      message:error.message
+    });
+  }
+});
+
+app.get('/api/catalog-html',async(req,res)=>{
+  try{
+    const query=new URLSearchParams();
+
+    Object.entries(req.query||{}).forEach(([key,value])=>{
+      if(
+        typeof value==='string' &&
+        /^[a-zA-Z0-9_]+$/.test(key)
+      ){
+        query.set(key,value);
+      }
+    });
+
+    const html=await fetchSource('/catalog',query.toString());
 
     res.set({
       'Content-Type':'text/html; charset=utf-8',
@@ -255,25 +477,12 @@ app.get('/api/catalog-html',async(req,res)=>{
 
     res.send(html);
   }catch(error){
-    console.error('[api/catalog-html]',error);
+    console.error('[catalog-html]',error);
 
     res.status(502).send(
       '<!doctype html><html lang="ru"><body>Источник временно недоступен</body></html>'
     );
   }
-});
-
-app.get('/',(req,res)=>{
-  res.json({
-    ok:true,
-    service:'red-dragon-car-api',
-    endpoints:[
-      '/health',
-      '/api/cars',
-      '/api/catalog',
-      '/api/catalog-html'
-    ]
-  });
 });
 
 app.listen(PORT,'0.0.0.0',()=>{
