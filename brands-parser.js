@@ -147,6 +147,7 @@ function extractModels(html) {
     seen.add(key);
 
     models.push({
+      brandSlug,
       name,
       slug: modelSlug,
       url: absoluteUrl(relativeUrl),
@@ -169,11 +170,13 @@ function buildDataset(html, sourceUrl) {
   for (const brand of brands.values()) grouped.set(brand.slug, { ...brand, models: [] });
 
   for (const model of models) {
-    if (!grouped.has(model.slug.split('/')[0])) continue;
-    grouped.get(model.slug.split('/')[0]).models.push(model);
+    const brand = grouped.get(model.brandSlug);
+    if (!brand) continue;
+    const { brandSlug, ...cleanModel } = model;
+    brand.models.push(cleanModel);
   }
 
-  const resultBrands = [...grouped.values()].filter(brand => brand.models.length);
+  const resultBrands = [...grouped.values()];
   const modelCount = resultBrands.reduce((sum, brand) => sum + brand.models.length, 0);
 
   if (EXPECTED_BRANDS && resultBrands.length !== EXPECTED_BRANDS) {
