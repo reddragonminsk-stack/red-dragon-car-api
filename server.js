@@ -59,12 +59,24 @@ let cache=null,refreshing=false,lastError=null;
 function readCache(){try{if(fs.existsSync(CACHE)){const x=JSON.parse(fs.readFileSync(CACHE,'utf8'));if(x&&x.live===true&&Array.isArray(x.cars)&&x.cars.length===12&&x.cars.every(c=>typeof c.image==='string'&&c.image.includes('/cached-images/'))){cache=x;return true}}}catch(e){lastError=e.message}return false}
 function writeCache(x){const tmp=CACHE+'.tmp';fs.writeFileSync(tmp,JSON.stringify(x));fs.renameSync(tmp,CACHE)}
 async function refresh(){if(refreshing)return cache;refreshing=true;try{const x=await load();const imageResults=await cacheImages(x.cars),cachedCount=imageResults.filter(i=>i.cached).length,failed=imageResults.filter(i=>!i.cached);if(!cachedCount)throw Error('ALL_HOME_IMAGES_CACHE_FAILED');const cleanup=await cleanupStaleImages(x.cars);cache={...x,imageCache:{total:imageResults.length,cached:cachedCount,failed:failed.length,cleanup,updatedAt:new Date().toISOString()}};writeCache(cache);lastError=failed.length?`IMAGE_CACHE_FAILED_${failed.length}`:null;return cache}catch(e){lastError=e.message;throw e}finally{refreshing=false}}
-async function route(r,fn){try{r.json(await fn())}catch(e){r.status(502).json({ok:false,live:false,error:e.message})}}
+function requireCache(){
+  if(!cache){
+    readCache();
+  }
+  if(!cache)throw Error('HOME_CACHE_UNAVAILABLE');
+  return cache;
+}
+async function route(r,fn){try{r.json(await fn())}catch(e){r.status(503).json({ok:false,live:false,cached:!!cache,error:e.message})}}
 app.use('/cached-images',express.static(IMAGE_CACHE,{fallthrough:false,maxAge:'7d',immutable:true}));
-app.get('/api/debug-source',(q,r)=>route(r,async()=>{if(!cache)await refresh();return{ok:true,status:200,source:cache.source,method:'home-cache',live:true,cached:true,updatedAt:cache.updatedAt,refreshing,foundUrls:cache.cars.length,imageCache:cache.imageCache||null,lastError}}));
-app.get('/api/home-cars',(q,r)=>route(r,async()=>{if(!cache)await refresh();const n=Math.min(12,Math.max(1,+q.query.limit||12));r.set('Cache-Control','public,max-age=300,stale-while-revalidate=3600');return{ok:true,count:n,foundUrls:cache.cars.length,method:'home-cache',live:true,cached:true,updatedAt:cache.updatedAt,source:cache.source,imageCache:cache.imageCache||null,cars:cache.cars.slice(0,n)}}));
-app.get('/api/cars',(q,r)=>route(r,async()=>{if(!cache)await refresh();return cache.cars}));
+app.get('/api/debug-source',(q,r)=>route(r,async()=>{const c=requireCache();return{ok:true,status:200,source:c.source,method:'home-cache',live:true,cached:true,updatedAt:c.updatedAt,refreshing,foundUrls:c.cars.length,imageCache:c.imageCache||null,lastError}}));
+app.get('/api/home-cars',(q,r)=>route(r,async()=>{const c=requireCache();const n=Math.min(12,Math.max(1,+q.query.limit||12));r.set('Cache-Control','public,max-age=300,stale-while-revalidate=3600');return{ok:true,count:n,foundUrls:c.cars.length,method:'home-cache',live:true,cached:true,updatedAt:c.updatedAt,source:c.source,imageCache:c.imageCache||null,cars:c.cars.slice(0,n)}}));
+app.get('/api/cars',(q,r)=>route(r,async()=>requireCache().cars));
 app.get('/api/refresh',(q,r)=>route(r,async()=>{const x=await refresh();return{ok:true,live:true,cached:true,updatedAt:x.updatedAt,count:x.cars.length,imageCache:x.imageCache,cars:x.cars}}));
 app.get('/health',(q,r)=>r.json({ok:true,live:!!cache,cached:!!cache,count:cache?.cars?.length||0,updatedAt:cache?.updatedAt||null,imageCache:cache?.imageCache||null,refreshing,lastError}));
 app.get('/',(q,r)=>r.json({ok:true,service:'red-dragon-car-api',live:!!cache,cached:!!cache,count:cache?.cars?.length||0,updatedAt:cache?.updatedAt||null,imageCache:cache?.imageCache||null}));
-app.listen(PORT,'0.0.0.0',async()=>{console.log('red-dragon-car-api listening on '+PORT);readCache();if(!cache)try{await refresh()}catch(e){console.error('initial refresh failed:',e.message)}setInterval(()=>{refresh().catch(e=>console.error('scheduled refresh:',e.message))},REFRESH_MS)});
+app.listen(PORT,'0.0.0.0',async()=>{
+  console.log('red-dragon-car-api listening on '+PORT);
+  const cacheReady=readCache();
+  if(!cacheReady)refresh().catch(e=>console.error('initial refresh failed:',e.message));
+  setInterval(()=>{refresh().catch(e=>console.error('scheduled refresh:',e.message))},REFRESH_MS)
+});
