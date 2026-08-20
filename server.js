@@ -64,18 +64,24 @@ function extractUrls(html){
 function extractImages(html){
   const out=[];
   const seen=new Set();
-  const patterns=[
-    /https?:\\/\\/img\.im4car\.com\\/[^"'\\s<>]+/gi,
-    /https?:\/\/img\.im4car\.com\/[^"'\\s<>]+/gi
-  ];
 
-  for(const re of patterns){
-    for(const m of html.matchAll(re)){
-      const u=abs(m[0].replace(/\\\//g,'/').replace(/[\\'"]+$/,''));
-      if(!u||seen.has(u))continue;
-      seen.add(u);
-      out.push(u);
-    }
+  for(const m of html.matchAll(/https?:\\/\\/[^"'\\s<>]+/gi)){
+    let u=m[0].replace(/\\\//g,'/').replace(/[\\'"]+$/,'');
+    if(!/\.(?:webp|jpg|jpeg|png)(?:\?|$)/i.test(u))continue;
+    u=abs(u);
+    if(!u||seen.has(u))continue;
+    seen.add(u);
+    out.push(u);
+  }
+
+  for(const m of html.matchAll(/(?:src|srcSet|content|image|url)\s*[:=]\s*["']([^"']+)["']/gi)){
+    let raw=m[1].replace(/\\\//g,'/');
+    const found=raw.match(/https?:\/\/[^\s,'"\\]+\.(?:webp|jpg|jpeg|png)(?:\?[^\s,'"\\]*)?/i);
+    if(!found)continue;
+    const u=abs(found[0]);
+    if(!u||seen.has(u))continue;
+    seen.add(u);
+    out.push(u);
   }
 
   return out;
