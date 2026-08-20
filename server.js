@@ -18,6 +18,25 @@ function clean(v){
   return String(v).replace(/\s+/g,' ').trim()||null;
 }
 
+function parseCardText(text){
+  text=clean(text)||'';
+  const price=(text.match(/(?:\$|USD)\s*([\d\s,.]+)/i)||[])[1]||null;
+  const year=(text.match(/\b20\d{2}\b/)||[])[0]||null;
+  const mileage=(text.match(/([\d\s,.]+)\s*(?:км|km)\b/i)||[])[1]||null;
+  let fuel=null;
+  if(/гибрид\s*\(PHEV\)/i.test(text))fuel='Гибрид (PHEV)';
+  else if(/гибрид\s*\(HEV\)/i.test(text))fuel='Гибрид (HEV)';
+  else if(/электро/i.test(text))fuel='Электро';
+  else if(/дизель/i.test(text))fuel='Дизель';
+  else if(/бензин/i.test(text))fuel='Бензин';
+  return{
+    price:price?price.replace(/\s/g,'').replace(/,/g,''):null,
+    year,
+    mileage:mileage?mileage.replace(/\s/g,''):null,
+    fuel
+  };
+}
+
 async function getBrowser(){
   if(!browserPromise){
     browserPromise=chromium.launch({
@@ -46,11 +65,12 @@ async function scrapeCatalog(){
 
   try{
     await page.goto(CATALOG,{waitUntil:'domcontentloaded',timeout:45000});
-    await page.waitForTimeout(3500);
+    await page.waitForTimeout(4500);
 
     for(let i=0;i<5;i++){
-      const count=await page.locator('a[href]').count();
-      if(count>80)break;
+      const imgs=await page.locator('img').count();
+      const links=await page.locator('a[href]').count();
+      if(imgs>=12&&links>40)break;
       await page.mouse.wheel(0,1400);
       await page.waitForTimeout(1000);
     }
@@ -61,42 +81,51 @@ async function scrapeCatalog(){
         try{return new URL(v,location.href).href}catch{return null}
       };
       const clean=v=>v==null?null:String(v).replace(/\s+/g,' ').trim()||null;
-      const bad=/\/(?:login|search|brand|news|about|contact)(?:\/|$)/i;
+      const excluded=/\/(?:login|search|brand|news|about|contact|catalog|brands?)(?:\/|$)/i;
       const items=[];
       const seen=new Set();
 
       for(const a of document.querySelectorAll('a[href]')){
         const href=abs(a.getAttribute('href'));
         if(!href||seen.has(href)||!href.includes('im4car.by'))continue;
-        if(bad.test(href)||/\/catalog\/?$/i.test(href))continue;
-        if(!/(\/cars?\/|\/catalog\/)/i.test(href))continue;
 
         const img=a.querySelector('img');
         const image=abs(
+          img?.currentSrc||
           img?.getAttribute('src')||
           img?.getAttribute('data-src')||
           img?.getAttribute('data-original')||
           img?.getAttribute('data-lazy-src')||''
         );
         const text=clean(a.innerText||a.textContent);
-        const parent=a.closest('article,li,[data-testid],div');
-        const parentText=clean(parent?.innerText||'');
-        const title=clean(
-          a.getAttribute('aria-label')||
-          a.getAttribute('title')||
-          text?.split('\n')[0]||
-          parentText?.split('\n')[0]
+        const box=a.closest('article,li,[data-testid]')||a;
+        const boxText=clean(box.innerText||text);
+        const combined=clean([text,boxText].filter(Boolean).join(' '))||'';
+
+        const hasPrice=/\$\s*[\d\s,.]+|[\d\s,.]+\s*USD/i.test(combined);
+        const hasYear=/\b20\d{2}\b/.test(combined);
+        const hasMileage=/[\d\s,.]+\s*(?:км|km)\b/i.test(combined);
+        const hasCarSignal=hasPrice&&(hasYear||hasMileage)||(image&&combined.length>40);
+
+        if(!hasCarSignal)continue;
+        if(excluded.test(href)&&!image)continue;
+
+        let title=clean(
+          box.querySelector('h1,h2,h3,h4,h5,[class*="title"],[class*="name"]')?.textContent||
+          text||
+          combined
         );
 
-        if(!image&&!text&&!title)continue;
+        title=title
+          .replace(/^\d+\s*фото\s*/i,'')
+          .replace(/^Первая линия\s*/i,'')
+          .replace(/\s+/g,' ')
+          .trim();
+
+        if(!title||title.length<3)title='Автомобиль';
 
         seen.add(href);
-        items.push({
-          url:href,
-          title:title||'Автомобиль',
-          image:image||null,
-          text:clean([text,parentText].filter(Boolean).join(' '))||null
-        });
+        items.push({url:href,title,image:image||null,text:combined});
 
         if(items.length>=20)break;
       }
@@ -109,21 +138,23 @@ async function scrapeCatalog(){
       };
     });
 
-    const cars=data.items.slice(0,12).map((c,i)=>({
-      id:String(i+1),
-      title:c.title,
-      price:null,
-      image:c.image,
-      url:c.url,
-      year:null,
-      mileage:null,
-      fuel:null,
-      drive:null,
-      brand:null,
-      model:null,
-      photos:null,
-      sourceText:c.text
-    }));
+    const cars=data.items.slice(0,12).map((c,i)=>{
+      const meta=parseCardText(c.text);
+      return{
+        id:String(i+1),
+        title:c.title,
+        price:meta.price,
+        image:c.image,
+        url:c.url,
+        year:meta.year,
+        mileage:meta.mileage,
+        fuel:meta.fuel,
+        drive:null,
+        brand:null,
+        model:null,
+        photos:null
+      };
+    });
 
     const result={
       source:data.url,
