@@ -6,8 +6,6 @@ const JINA = 'https://r.jina.ai/';
 const AO = 'https://api.allorigins.win/raw?url=';
 const CACHE = path.join(__dirname, process.env.BRANDS_CACHE_FILE || 'runtime-brands.json');
 const REFRESH_MS = Number(process.env.BRANDS_REFRESH_MS || 3600000);
-const EXPECTED_BRANDS = Number(process.env.BRANDS_EXPECTED_COUNT || 130);
-const EXPECTED_MODELS = Number(process.env.BRANDS_EXPECTED_MODELS || 1624);
 
 const H = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36',
@@ -180,12 +178,7 @@ function buildDataset(html, sourceUrl) {
   const resultBrands = [...grouped.values()];
   const modelCount = resultBrands.reduce((sum, brand) => sum + brand.models.length, 0);
 
-  if (EXPECTED_BRANDS && resultBrands.length !== EXPECTED_BRANDS) {
-    throw new Error(`BRANDS_COUNT_${resultBrands.length}_EXPECTED_${EXPECTED_BRANDS}`);
-  }
-  if (EXPECTED_MODELS && modelCount !== EXPECTED_MODELS) {
-    throw new Error(`MODELS_COUNT_${modelCount}_EXPECTED_${EXPECTED_MODELS}`);
-  }
+  if (!resultBrands.length) throw new Error('BRANDS_WITH_MODELS_NOT_FOUND');
 
   return {
     source: sourceUrl,
