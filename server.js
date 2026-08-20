@@ -24,6 +24,7 @@ function clean(v){
     .replace(/\\u003e/gi,'>')
     .replace(/\\u0026/gi,'&')
     .replace(/\\"/g,'"')
+    .replace(/\\n/g,' ')
     .replace(/\s+/g,' ')
     .trim()||null;
 }
@@ -65,23 +66,21 @@ function extractImages(html){
   const out=[];
   const seen=new Set();
 
-  for(const m of html.matchAll(/https?:\\/\\/[^"'\\s<>]+/gi)){
-    let u=m[0].replace(/\\\//g,'/').replace(/[\\'"]+$/,'');
-    if(!/\.(?:webp|jpg|jpeg|png)(?:\?|$)/i.test(u))continue;
-    u=abs(u);
-    if(!u||seen.has(u))continue;
+  const add=v=>{
+    const u=abs(clean(v));
+    if(!u||seen.has(u))return;
+    if(!/^https?:\/\//i.test(u))return;
+    if(!/\.(?:webp|jpg|jpeg|png)(?:[?#].*)?$/i.test(u))return;
     seen.add(u);
     out.push(u);
+  };
+
+  for(const m of html.matchAll(/(?:src|data-src|data-original|data-lazy-src|content)\s*=\s*["']([^"']+)["']/gi)){
+    add(m[1]);
   }
 
-  for(const m of html.matchAll(/(?:src|srcSet|content|image|url)\s*[:=]\s*["']([^"']+)["']/gi)){
-    let raw=m[1].replace(/\\\//g,'/');
-    const found=raw.match(/https?:\/\/[^\s,'"\\]+\.(?:webp|jpg|jpeg|png)(?:\?[^\s,'"\\]*)?/i);
-    if(!found)continue;
-    const u=abs(found[0]);
-    if(!u||seen.has(u))continue;
-    seen.add(u);
-    out.push(u);
+  for(const m of html.matchAll(/https?:[^"'<>\s]+\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi)){
+    add(m[0]);
   }
 
   return out;
@@ -96,25 +95,21 @@ function textFromHtml(html){
   )||'';
 }
 
+function meta(html,name){
+  const esc=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const a=new RegExp('<meta[^>]+(?:name|property)=["']'+esc+'["'][^>]+content=["']([^"']+)["']','i');
+  const b=new RegExp('<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']'+esc+'["']','i');
+  return clean((html.match(a)||[])[1]||(html.match(b)||[])[1]);
+}
+
 function parsePage(html,url,fallbackImage){
   const text=textFromHtml(html);
-  const title=clean(
-    (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i)||[])[1]||
-    (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||
-    'Автомобиль'
-  );
-
-  const image=clean(
-    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i)||[])[1]||
-    fallbackImage||
-    extractImages(html)[0]
-  );
-
+  const title=meta(html,'og:title')||clean((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1])||'Автомобиль';
+  const image=meta(html,'og:image')||fallbackImage||extractImages(html)[0]||null;
   const price=clean(
     (text.match(/(?:\$|USD)\s*([\d\s,.]+)/i)||[])[1]||
     (text.match(/([\d\s,.]+)\s*(?:\$|USD)/i)||[])[1]
   );
-
   const year=(text.match(/\b20\d{2}\b/)||[])[0]||null;
   const mileage=clean((text.match(/([\d\s,.]+)\s*(?:км|km)\b/i)||[])[1]);
 
