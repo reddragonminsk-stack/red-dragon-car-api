@@ -86,26 +86,17 @@ function extractImages(html){
   return out;
 }
 
-function textFromHtml(html){
-  return clean(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi,' ')
-      .replace(/<style[\s\S]*?<\/style>/gi,' ')
-      .replace(/<[^>]+>/g,' ')
-  )||'';
-}
-
-function meta(html,name){
-  const esc=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  const a=new RegExp('<meta[^>]+(?:name|property)=["']'+esc+'["'][^>]+content=["']([^"']+)["']','i');
-  const b=new RegExp('<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']'+esc+'["']','i');
-  return clean((html.match(a)||[])[1]||(html.match(b)||[])[1]);
+function getMeta(html,name){
+  const e=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const r1=new RegExp(`<meta[^>]+(?:name|property)=["']${e}["'][^>]+content=["']([^"']+)["']`,'i');
+  const r2=new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']${e}["']`,'i');
+  return clean((html.match(r1)||[])[1]||(html.match(r2)||[])[1]);
 }
 
 function parsePage(html,url,fallbackImage){
   const text=textFromHtml(html);
-  const title=meta(html,'og:title')||clean((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1])||'Автомобиль';
-  const image=meta(html,'og:image')||fallbackImage||extractImages(html)[0]||null;
+  const title=getMeta(html,'og:title')||clean((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1])||'Автомобиль';
+  const image=getMeta(html,'og:image')||fallbackImage||extractImages(html)[0]||null;
   const price=clean(
     (text.match(/(?:\$|USD)\s*([\d\s,.]+)/i)||[])[1]||
     (text.match(/([\d\s,.]+)\s*(?:\$|USD)/i)||[])[1]
@@ -126,6 +117,15 @@ function parsePage(html,url,fallbackImage){
     model:null,
     photos:null
   };
+}
+
+function textFromHtml(html){
+  return clean(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,' ')
+  )||'';
 }
 
 async function getCars(limit=12){
@@ -153,11 +153,7 @@ async function getCars(limit=12){
     }
   }
 
-  return{
-    source:catalog.url,
-    foundUrls:urls.length,
-    cars:cars.slice(0,limit)
-  };
+  return{source:catalog.url,foundUrls:urls.length,cars:cars.slice(0,limit)};
 }
 
 app.get('/',(req,res)=>res.json({ok:true,service:'red-dragon-car-api',endpoint:'/api/home-cars?limit=12'}));
@@ -188,16 +184,7 @@ app.get('/api/debug-source',async(req,res)=>{
     const catalog=await fetchPage(CATALOG);
     const urls=extractUrls(catalog.text);
     const images=extractImages(catalog.text);
-    res.json({
-      ok:catalog.ok,
-      status:catalog.status,
-      source:catalog.url,
-      htmlLength:catalog.text.length,
-      foundUrls:urls.length,
-      images:images.length,
-      sampleUrls:urls.slice(0,12),
-      sampleImages:images.slice(0,12)
-    });
+    res.json({ok:catalog.ok,status:catalog.status,source:catalog.url,htmlLength:catalog.text.length,foundUrls:urls.length,images:images.length,sampleUrls:urls.slice(0,12),sampleImages:images.slice(0,12)});
   }catch(e){
     res.status(502).json({ok:false,error:e.message});
   }
