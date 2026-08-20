@@ -6,6 +6,7 @@
   "scripts":{
     "start":"PLAYWRIGHT_BROWSERS_PATH=0 node server.js",
     "parser:brands":"node brands-parser.js",
+    "start:brands":"node brands-service.js",
     "postinstall":"PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium"
   },
   "engines":{
