@@ -5,7 +5,7 @@ const SOURCE = process.env.BRANDS_SOURCE_URL || 'https://im4car.by/brands';
 const JINA = 'https://r.jina.ai/';
 const AO = 'https://api.allorigins.win/raw?url=';
 const CACHE = path.join(__dirname, process.env.BRANDS_CACHE_FILE || 'runtime-brands.json');
-const REFRESH_MS = Number(process.env.BRANDS_REFRESH_MS || 3600000);
+const REFRESH_MS = Number(process.env.BRANDS_REFRESH_MS || 86400000);
 
 const H = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36',
@@ -215,6 +215,7 @@ async function refresh() {
 async function main() {
   console.log(`[brands] source: ${SOURCE}`);
   console.log(`[brands] cache: ${CACHE}`);
+  console.log(`[brands] refresh: every 24 hours`);
   try {
     await refresh();
   } catch (error) {
