@@ -4,12 +4,20 @@ on:
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
+  push:
+    paths:
+      - 'server.js'
+      - 'source-fetch-bootstrap.js'
+      - 'scripts/publish-cache.js'
+      - 'package.json'
+      - 'wrangler.json'
 
 permissions:
   contents: write
 
 jobs:
   publish-cache:
+    if: github.event_name != 'push' || github.event.head_commit.message != 'Refresh static car cache'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
