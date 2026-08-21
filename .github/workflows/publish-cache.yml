@@ -1,5 +1,6 @@
 name: Publish static car cache
 
+# Push, daily schedule, and manual execution; cache commits do not re-trigger this workflow.
 on:
   schedule:
     - cron: '0 4 * * *'
@@ -11,6 +12,7 @@ on:
       - 'scripts/publish-cache.js'
       - 'package.json'
       - 'wrangler.json'
+      - '.github/workflows/publish-cache.yml'
 
 permissions:
   contents: write
