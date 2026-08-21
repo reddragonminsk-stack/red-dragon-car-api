@@ -1,0 +1,7 @@
+{
+  "name": "red-dragon-car-cache",
+  "compatibility_date": "2026-08-21",
+  "assets": {
+    "directory": "./cache"
+  }
+}
