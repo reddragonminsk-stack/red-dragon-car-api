@@ -1,14 +1,14 @@
 # IM4Car partner API proxy
 
-The catalog must not call `api.im4car.by` directly from browser code. The server exposes a restricted proxy at `/api/im4car/*` and keeps the upstream token in the server environment.
+Catalog browser code must not call `api.im4car.by` directly. The Cloudflare Worker exposes `/api/im4car/*` and keeps the upstream token in the Worker Secret `IM4CAR_API_KEY`.
 
-## Render environment variable
+## Cloudflare Secret
 
-Create this environment variable on the Render service:
+In the Cloudflare Worker `red-dragon-car-api` create a secret:
 
 `IM4CAR_API_KEY=<NEW_IM4CAR_PARTNER_KEY>`
 
-Do not put the key into GitHub files or Tilda JavaScript.
+Do not put the key into GitHub files, `wrangler.json`, or Tilda JavaScript.
 
 ## Allowed endpoints
 
@@ -17,18 +17,18 @@ Do not put the key into GitHub files or Tilda JavaScript.
 - `/api/im4car/listings`
 - `/api/im4car/cars`
 
-The proxy only accepts GET/OPTIONS requests and only allows browser CORS from `https://red-dragon.by` and `https://www.red-dragon.by`.
+The proxy accepts only GET/OPTIONS and allows browser CORS only from `https://red-dragon.by` and `https://www.red-dragon.by`.
 
 ## Tilda
 
-Change the catalog configuration to:
+Use the Worker URL as `API_BASE`, for example:
 
-`API_BASE:'https://red-dragon-car-api.onrender.com/api/im4car'`
+`API_BASE:'https://red-dragon-car-api.<YOUR_SUBDOMAIN>.workers.dev/api/im4car'`
 
-and remove `API_KEY` from the Tilda code. The existing `fetchJson()` authorization header must also be removed because the server adds the Bearer token itself.
+Remove `API_KEY` from the Tilda code and remove the browser `Authorization: Bearer ...` header. The Worker adds the Bearer token server-side.
 
-After deployment, test:
+## Deploy
 
-`https://red-dragon-car-api.onrender.com/api/im4car/reference`
+Deploy the existing `worker.js` with Wrangler. The repository already contains `wrangler.json` and the KV binding used by the existing Worker routes.
 
-A successful response means the proxy is forwarding the request with the secret held server-side.
+Set the secret before testing. Then open `/api/im4car/reference`; the response must come from IM4Car while the token remains server-side.
